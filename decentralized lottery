@@ -1,0 +1,64 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract DecentralizedLottery {
+    // Адрес менеджера (создателя) контракта
+    address public manager;
+    // Массив для хранения участников (игроков)
+    address payable[] public players;
+    // Флаг, показывающий, активна ли лотерея
+    bool public lotteryActive;
+
+    // События для логирования важных действий
+    event LotteryStarted();
+    event LotteryEntered(address indexed player, uint256 amount);
+    event LotteryEnded(address indexed winner, uint256 prize);
+
+    /// @notice Конструктор, задающий менеджера контракта
+    constructor() {
+        manager = msg.sender;
+    }
+
+    /// @notice Функция для запуска лотереи менеджером
+    function startLottery() external {
+        require(msg.sender == manager, "Only manager can start lottery");
+        require(!lotteryActive, "Lottery already active");
+
+        lotteryActive = true;
+        emit LotteryStarted();
+    }
+
+    /// @notice Функция для участия в лотерее. Для входа необходимо отправить не менее 0.01 ETH.
+    function enter() external payable {
+        require(lotteryActive, "Lottery is not active");
+        require(msg.value >= 0.01 ether, "Minimum entry fee is 0.01 ether");
+
+        players.push(payable(msg.sender));
+        emit LotteryEntered(msg.sender, msg.value);
+    }
+
+    /// @notice Функция для завершения лотереи и выбора победителя менеджером
+    function endLottery() external {
+        require(msg.sender == manager, "Only manager can end lottery");
+        require(lotteryActive, "Lottery is not active");
+        require(players.length > 0, "No players in lottery");
+
+        // Генерация псевдослучайного числа на основе текущего времени, сложности блока и количества игроков
+        uint randomNumber = uint(keccak256(abi.encodePacked(block.timestamp, block.difficulty, players.length)));
+        uint winnerIndex = randomNumber % players.length;
+        address payable winner = players[winnerIndex];
+
+        uint prize = address(this).balance;
+        lotteryActive = false;
+        // Сброс списка участников для новой лотереи
+        delete players;
+
+        // Перевод призового фонда победителю
+        (bool sent, ) = winner.call{value: prize}("");
+        require(sent, "Failed to send Ether to winner");
+
+        emit LotteryEnded(winner, prize);
+    }
+
+    /// @notice Функция для получения количества участников в текущей лотерее
+    function getP
