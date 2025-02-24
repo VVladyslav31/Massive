@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract CrowdfundingPlatform {
+    // Структура, описывающая кампанию
+    struct Campaign {
+        address payable owner; // Создатель кампании
+        uint256 target;        // Целевая сумма сбора средств (в wei)
+        uint256 deadline;      // Время окончания кампании (timestamp)
+        uint256 totalFunds;    // Собранная сумма средств
+        bool withdrawn;        // Флаг, указывающий на вывод средств владельцем
+    }
+
+    // Счётчик созданных кампаний
+    uint public campaignCount;
+
+    // Хранение кампаний по их ID
+    mapping(uint => Campaign) public campaigns;
+    // Вклад каждого участника по каждой кампании: campaignId => (адрес => сумма)
+    mapping(uint => mapping(address => uint)) public contributions;
+
+    // События для логирования основных действий
+    event CampaignCreated(uint campaignId, address owner, uint256 target, uint256 deadline);
+    event ContributionMade(uint campaignId, address contributor, uint256 amount);
+    event FundsWithdrawn(uint campaignId, address owner, uint256 amount);
+    event RefundIssued(uint campaignId, address contributor, uint256 amount);
+
+    /// @notice Создание новой кампании
+    /// @param _target Целевая сумма сбора средств (wei)
+    /// @param _durationInSeconds Длительность кампании в секундах
+    function createCampaign(uint256 _target, uint256 _durationInSeconds) external {
+        require(_target > 0, "Target must be > 0");
+        require(_durationInSeconds > 0, "Duration must be > 0");
+
+        campaignCount++;
+        campaigns[campaignCount] = Campaign({
+            owner: payable(msg.sender),
+            target: _target,
+            deadline: block.timestamp + _durationInSeconds,
+            totalFunds: 0,
+            withdrawn: false
+        });
+
+        emit CampaignCreated(campaignCount, msg.sender, _target, block.timestamp + _durationInSeconds);
+    }
+
+    /// @notice Внесение взноса в кампанию
+    /// @param _campaignId ID кампании
+    function contribute(uint _campaignId) external payable {
+        Campaign storage campaign = campaigns[_campaignId];
+        require(block.timestamp < campaign.deadline, "Campaign deadline passed");
+        require(msg.value > 0, "Contribution must be > 0");
+
+        contributions[_campaignId][msg.sender] += msg.value;
+        campaign.totalFunds += msg.value;
+
+        emit ContributionMade(_campaignId, msg.sender, msg.value);
+    }
+
+    /// @notice Вывод средств владельцем кампании, если цель достигнута
+    /// @param _campaignId ID кампании
+    function withdrawFunds(uint _campaignId) external {
+        Campaign storage campaign = campaigns[_campaignId];
+        require(msg.sender == campaign.owner, "Only owner can withdraw");
+        require(block.timestamp >= campaign.deadline, "Campaign still active");
+        require(campaign.totalFunds >= campaign.target, "Funding target not met");
+        require(!campaign.withdrawn, "Funds already withdrawn");
+
+        campaign.withdrawn = true;
+        uint amount = campaign.totalFunds;
+        campaign.totalFunds = 0; // Обнуляем сумму перед переводом для защиты от reentrancy
+
+        (bool success, ) = campaign.owner.call{value: amount}("");
+        require(success, "Transfer failed");
+
+        emit FundsWithdrawn(_campaignId, campaign.owner, amount);
+    }
+
+    /// @notice Возврат взносов участникам, если кампания не достигла цели
+    /// @param _campaignId ID кампании
+    function claimRefund(uint _campaignId) external {
+        Campaign storage campaign = campaigns[_campaignId];
+        require(block.timestamp >= campaign.deadline, "Campaign still active");
+        require(campaign.totalFunds < campaign.target, "Funding target met, no refunds");
+
+        uint contributed = contributions[_campaignId][msg.sender];
+        require(contributed > 0, "No contributions to refund");
+
+        contributions[_campaignId][msg.sender] = 0;
+        (bool success, ) = msg.sender.call{value: contributed}("");
+        require(success, "Refund transfer failed");
+
+        emit RefundIssued(_campaignId, msg.sender, contributed);
+    }
+}
